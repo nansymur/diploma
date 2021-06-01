@@ -1,0 +1,1109 @@
+---
+title: "diplom"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+```{r include=FALSE}
+library(tidyverse)
+library(gtrendsR)
+library(readxl)
+library(writexl)
+library(sf)
+library(spdep)
+library(ggplot2)
+library(car)
+library(lmtest)
+library(stargazer)
+library(spatialreg)
+library(texreg)
+library(dplyr) 
+library(caret) 
+library(repr)
+library(varhandle)
+```
+Import data frame containing state names (e.g. "Alabama"), state codes
+(e.g. "AL"), latitude, longitude, average temperature (degrees Celcius)
+and precipitations (inches).
+
+``` {r}
+state_info<-read_excel("/Users/nastyamurach/Desktop/диплом/state_info.xlsx")
+```
+
+#данные за 2019 
+```{r}
+states <- paste0("US-",state.abb)
+
+
+gtrends_orth19_back<-gtrends(
+keyword = c("back brace"),
+geo = "US",
+time = "2019-01-01 2019-12-31",
+low_search_volume = TRUE)
+```
+
+Create a database of zip code characteristics using US census API.
+
+``` {r}
+# Load the tidycensus package into your R session
+library(tidycensus)
+# Define your Census API key and set it with census_api_key()
+api_key <- "adb17a79927311f38e26b60b23cac8393a7af0a2"
+census_api_key(api_key,install=TRUE,overwrite = TRUE)
+```
+
+Load the catalog of variables from 1-year ACS 2019.
+
+``` {r}
+readRenviron("~/.Renviron")
+variables <- load_variables(2019, "acs1", cache = TRUE)
+#varivales are smaller amount than for 1 year
+```
+
+```{#r}
+# create subfolder for outputs
+dir.create(file.path("Outputs1"), recursive = TRUE)
+
+# save variables.csv for easy search of relevant ACS variables in Excel
+write_xlsx(variables, "Outputs1/variables.xlsx") 
+```
+
+Get ACS data
+
+``` {r}
+##demographic 
+names<-c( 
+fem_0_5 = "B01001_027",
+fem_5_9="B01001_028",
+fem_10_14="B01001_029",
+fem_15_17="B01001_030",
+fem_18_19="B01001_031",
+fem_20="B01001_032",
+fem_21="B01001_033",
+fem_22_24="B01001_034",
+fem_25_29="B01001_035",
+fem_30_34="B01001_036",
+fem_35_39="B01001_037",
+fem_40_44="B01001_038",
+fem_45_49="B01001_039",
+fem_50_54="B01001_040",
+fem_55_59="B01001_041",
+fem_60_61="B01001_042",
+fem_62_64="B01001_043",
+fem_65_66="B01001_044",
+fem_67_69="B01001_045",
+fem_70_74="B01001_046",
+fem_75_79="B01001_047",
+fem_80_84="B01001_048",
+fem_85_over="B01001_049",
+ 
+mal_0_4="B01001_003",
+mal_5_9="B01001_004",
+mal_10_14="B01001_005",
+mal_15_17="B01001_006",
+mal_18_19="B01001_007",
+mal_20="B01001_008",
+mal_21="B01001_009",
+mal_22_24="B01001_010",
+mal_25_29="B01001_011",
+mal_30_34="B01001_012",
+mal_35_39="B01001_013",
+mal_40_44="B01001_014",
+mal_45_49="B01001_015",
+mal_50_54="B01001_016",
+mal_55_59="B01001_017",
+mal_60_61="B01001_018",
+mal_62_64="B01001_019",
+mal_65_66="B01001_020",
+mal_67_69="B01001_021",
+mal_70_74="B01001_022",
+mal_75_79="B01001_023",
+mal_80_84="B01001_024",
+mal_85_over="B01001_025",
+
+total="B02001_001",
+
+# race
+white="B02001_002",
+black="B02001_003",
+asian="B02001_005", 
+
+##economical
+household_inc_less_10 = "B19001_002", # in thousands $ (ltm inflation-adjusted)
+household_inc_10_14 = "B19001_003" ,
+household_inc_15_19 = "B19001_004",
+household_inc_20_24 = "B19001_005", 
+household_inc_25_29 = "B19001_006", 
+household_inc_30_34 = "B19001_007", 
+household_inc_35_39 = "B19001_008", 
+household_inc_40_44 = "B19001_009", 
+household_inc_45_49 = "B19001_010", 
+household_inc_50_59 = "B19001_011", 
+household_inc_60_74 = "B19001_012", 
+household_inc_75_99 = "B19001_013", 
+household_inc_100_124 = "B19001_014", 
+household_inc_125_149 = "B19001_015", 
+household_inc_150_199 = "B19001_016", 
+household_inc_200_more = "B19001_017",  
+
+# type of occupation
+man_bus_sc_occ = "B08124_002", # Management, business, science, and arts occupations
+serv_occ = "B08124_003", # Service
+sal_off_occ = "B08124_004", # Sales and office occupations
+constr_occ = "B08124_005",    #Natural resources, construction, and maintenance occupations
+prod_transp_occ = "B08124_006", #Production, transportation, and material moving occupations
+mil_occ = "B08124_007", # Military specific occupations
+
+#class of worker
+pr_wage_sal_work = "B08128_002", # Private wage and salary workers
+local_govern_work = "B08128_006", # Local Government workers
+stat_govern_work = "B08128_007", # State Government workers
+fed_govern_work = "B08128_008", # Federal Government workers
+self_empl = "B08128_009", # Self-employed in own not incorporated business workers
+unpaid_fam_work = "B08128_010", # Unpaid family workers (housewives)
+
+##social
+# marital status
+#never_marr = "B06008_002",
+marr = "B06008_003",
+div = "B06008_004",
+sep = "B06008_005",
+widowed = "B06008_006"
+)
+
+```
+
+```{r}
+median_household_19<-get_acs("state",
+                  variables=c("B19013_001", "B02001_001"),
+                  survey="acs1",
+                  geometry=TRUE,
+                  year=2019,
+                  output = "wide",
+                  shift_geo = TRUE)
+# median houshold = 68703 $ 
+```
+
+Merged interest by region data with state codes so that the resulting
+data frame has 3 columns: state, hits, keyword, state\_code
+
+``` {r}
+data_orth19_back<-gtrends_orth19_back$interest_by_region%>%
+  replace_na(list(hits=0))%>%
+  dplyr::select(-geo,-gprop,-keyword) %>%
+  dplyr::rename("NAME"="location") %>%
+  left_join(state_info)  
+```
+
+```{r}
+# get ACS data on the features specified above
+acs_data19<-get_acs("state",
+                  variables=names,
+                  survey="acs1",
+                  geometry=TRUE,
+                  year=2019,
+                  output = "wide",
+                  shift_geo = TRUE) # Shifting Alaska and Hawaii geometry
+
+#acs_data19 = acs_data19 %>% separate(NAME, c("County","State"), sep = ",")
+# remove margins of error - keep only estimates
+acs_data19<-acs_data19 %>%dplyr::select(-ends_with("M"))
+acs_data19 <- acs_data19 %>% mutate(div_sep_wid = divE + sepE + widowedE) %>% dplyr::select(-divE, -sepE, -widowedE) 
+```
+ 
+Convert counts to % of total population
+---------------------------------------
+``` {r}
+perc=dplyr::select(as.data.frame(acs_data19),fem_0_5E:div_sep_wid)/
+  rep(as.data.frame(acs_data19)[,which(colnames(as.data.frame(acs_data19))=="totalE")],
+      ncol(dplyr::select(as.data.frame(acs_data19),fem_0_5E:div_sep_wid)))*100
+colnames(perc)<-paste0("perc_",colnames(perc))
+
+acs_data19<-bind_cols(acs_data19,perc)%>%
+  dplyr::select(!fem_0_5E:div_sep_wid,-perc_totalE)
+```
+
+Merge census data with Google trends data
+-----------------------------------------
+
+``` {r}
+data19_back<-data_orth19_back %>% mutate(year = "2019") %>%
+  left_join(acs_data19) 
+```
+
+#данные 2018
+
+```{r}
+gtrends_orth18_back<-gtrends(
+keyword = c("back brace"),
+geo = "US",
+time = "2018-01-01 2018-12-31",
+low_search_volume = TRUE)  
+```
+
+Merged interest by region data with state codes so that the resulting
+data frame has 3 columns: state, hits, keyword, state\_code
+
+```{r}
+data_orth18_back<-gtrends_orth18_back$interest_by_region%>%
+  replace_na(list(hits=0))%>%
+  dplyr::select(-geo,-gprop,-keyword)%>%
+  dplyr::rename("NAME"="location") %>%
+  left_join(state_info)
+```
+
+```{r}
+# get ACS data on the features specified above
+acs_data18<-get_acs("state", 
+                  variables=names,
+                  survey="acs1",
+                  geometry=TRUE,
+                  year=2018,
+                  output = "wide",
+                  shift_geo = TRUE) # Shifting Alaska and Hawaii geometry
+
+#acs_data18 = acs_data18 %>% separate(NAME, c("County","State"), sep = ",")
+# remove margins of error - keep only estimates
+acs_data18<-acs_data18%>%dplyr::select(-ends_with("M"))
+acs_data18 <- acs_data18 %>% mutate(div_sep_wid = divE + sepE + widowedE) %>% dplyr::select(-divE, -sepE, -widowedE) 
+```
+
+Convert counts to % of total population
+---------------------------------------
+
+``` {r}
+perc=dplyr::select(as.data.frame(acs_data18),fem_0_5E:div_sep_wid)/
+  rep(as.data.frame(acs_data18)[,which(colnames(as.data.frame(acs_data18))=="totalE")],
+      ncol(dplyr::select(as.data.frame(acs_data18),fem_0_5E:div_sep_wid)))*100
+colnames(perc)<-paste0("perc_",colnames(perc))
+
+acs_data18<-bind_cols(acs_data18,perc)%>%
+  dplyr::select(!fem_0_5E:div_sep_wid,-perc_totalE)
+```
+
+``` {r}
+data18_back<- data_orth18 %>% dplyr::mutate(year = "2018") %>%
+  left_join(acs_data18)  
+```
+
+
+#данные 2017
+
+```{r}
+gtrends_orth17_back<-gtrends(
+keyword = c("back brace"),
+geo = "US",
+time = "2017-01-01 2017-12-31",
+low_search_volume = TRUE)  
+```
+
+Merged interest by region data with state codes so that the resulting
+data frame has 3 columns: state, hits, keyword, state\_code
+
+```{r}
+data_orth17_back<-gtrends_orth17_back$interest_by_region%>%
+  replace_na(list(hits=0))%>%
+  dplyr::select(-geo,-gprop,-keyword)%>%
+  dplyr::rename("NAME"="location") %>%
+  left_join(state_info)
+```
+
+```{r}
+# get ACS data on the features specified above
+acs_data17<-get_acs("state", 
+                  variables=names,
+                  survey="acs1",
+                  geometry=TRUE,
+                  year=2017,
+                  output = "wide",
+                  shift_geo = TRUE) # Shifting Alaska and Hawaii geometry
+
+#acs_data18 = acs_data18 %>% separate(NAME, c("County","State"), sep = ",")
+# remove margins of error - keep only estimates
+acs_data17<-acs_data17%>% dplyr::select(-ends_with("M"))
+acs_data17 <- acs_data17 %>% mutate(div_sep_wid = divE + sepE + widowedE) %>% dplyr::select(-divE, -sepE, -widowedE) 
+```
+
+Convert counts to % of total population
+---------------------------------------
+
+``` {r}
+perc=dplyr::select(as.data.frame(acs_data17),fem_0_5E:div_sep_wid)/
+  rep(as.data.frame(acs_data17)[,which(colnames(as.data.frame(acs_data17))=="totalE")],
+      ncol(dplyr::select(as.data.frame(acs_data17),fem_0_5E:div_sep_wid)))*100
+colnames(perc)<-paste0("perc_",colnames(perc))
+
+acs_data17<-bind_cols(acs_data17,perc)%>%
+  dplyr::select(!fem_0_5E:div_sep_wid,-perc_totalE)
+```
+
+``` {r}
+data17_back<- data_orth17_back %>% mutate(year = "2017") %>%
+  left_join(acs_data17)  
+```
+
+#данные 2016
+
+```{r}
+gtrends_orth16_back<-gtrends(
+keyword = c("back brace"),
+geo = "US",
+time = "2016-01-01 2016-12-31",
+low_search_volume = TRUE)
+```
+
+Merged interest by region data with state codes so that the resulting
+data frame has 3 columns: state, hits, keyword, state\_code
+
+```{r}
+data_orth16_back<-gtrends_orth16_back$interest_by_region%>%
+  replace_na(list(hits=0))%>%
+  dplyr::select(-geo,-gprop,-keyword)%>%
+  dplyr::rename("NAME"="location") %>%
+  left_join(state_info)
+```
+
+```{r}
+# get ACS data on the features specified above
+acs_data16<-get_acs("state", 
+                  variables=names,
+                  survey="acs1",
+                  geometry=TRUE,
+                  year=2016,
+                  output = "wide",
+                  shift_geo = TRUE) # Shifting Alaska and Hawaii geometry
+
+#acs_data18 = acs_data18 %>% separate(NAME, c("County","State"), sep = ",")
+# remove margins of error - keep only estimates
+acs_data16<-acs_data16%>% dplyr::select(-ends_with("M"))
+acs_data16 <- acs_data16 %>% mutate(div_sep_wid = divE + sepE + widowedE) %>% dplyr::select(-divE, -sepE, -widowedE) 
+```
+
+Convert counts to % of total population
+---------------------------------------
+
+``` {r}
+perc=dplyr::select(as.data.frame(acs_data16),fem_0_5E:div_sep_wid)/
+  rep(as.data.frame(acs_data16)[,which(colnames(as.data.frame(acs_data16))=="totalE")],
+      ncol(dplyr::select(as.data.frame(acs_data16),fem_0_5E:div_sep_wid)))*100
+colnames(perc)<-paste0("perc_",colnames(perc))
+
+acs_data16<-bind_cols(acs_data16,perc)%>%
+  dplyr::select(!fem_0_5E:div_sep_wid,-perc_totalE)
+```
+
+``` {r}
+data16_back<- data_orth16_back %>% mutate(year = "2016") %>%
+  left_join(acs_data16)  
+```
+
+#данные 2015
+
+```{r}
+gtrends_orth15_back<-gtrends(
+keyword = c("back brace"),
+geo = "US",
+time = "2015-01-01 2015-12-31",
+low_search_volume = TRUE)
+```
+
+Merged interest by region data with state codes so that the resulting
+data frame has 3 columns: state, hits, keyword, state\_code
+
+```{r}
+data_orth15_back<-gtrends_orth15_back$interest_by_region%>%
+  replace_na(list(hits=0))%>%
+  dplyr::select(-geo, -gprop,-keyword)%>%
+  dplyr::rename("NAME"="location") %>%
+  left_join(state_info)
+```
+
+```{r}
+# get ACS data on the features specified above
+acs_data15<-get_acs("state", 
+                  variables=names,
+                  survey="acs1",
+                  geometry=TRUE,
+                  year=2015,
+                  output = "wide",
+                  shift_geo = TRUE) # Shifting Alaska and Hawaii geometry
+
+#acs_data18 = acs_data18 %>% separate(NAME, c("County","State"), sep = ",")
+# remove margins of error - keep only estimates
+acs_data15<-acs_data15%>%dplyr::select(-ends_with("M"))
+acs_data15 <- acs_data15 %>% mutate(div_sep_wid = divE + sepE + widowedE) %>% dplyr::select(-divE, -sepE, -widowedE) 
+```
+
+Convert counts to % of total population
+---------------------------------------
+
+``` {r}
+perc=dplyr::select(as.data.frame(acs_data15),fem_0_5E:div_sep_wid)/
+  rep(as.data.frame(acs_data15)[,which(colnames(as.data.frame(acs_data15))=="totalE")],
+      ncol(dplyr::select(as.data.frame(acs_data15),fem_0_5E:div_sep_wid)))*100
+colnames(perc)<-paste0("perc_",colnames(perc))
+
+acs_data15<-bind_cols(acs_data15,perc)%>%
+  dplyr::select(!fem_0_5E:div_sep_wid,-perc_totalE)
+```
+
+``` {r}
+data15_back<- data_orth15_back %>% mutate(year = "2015") %>%
+  left_join(acs_data15)  
+```
+
+##Соеденим датасеты за несколько лет
+
+```{r} 
+data_back = rbind(data19_back, data18_back, data17_back, data16_back, data15_back)
+data_back = data_back %>% dplyr::select(-geometry, -GEOID)
+```
+
+
+remove E - the last character of some column names
+--------------------------------------------------
+
+``` {r}
+colnames(data_back)<-ifelse(substr(colnames(data_back),nchar(colnames(data_back)),
+                              nchar(colnames(data_back)))=="E"&
+                         !colnames(data_back) %in% c("NAME","latitude","longitude"), 
+                       substr(colnames(data_back),1,nchar(colnames(data_back))-1),
+                       colnames(data_back))
+
+#write.csv(data_back, "data_back.csv", row.names = F)
+```
+
+
+```{r}
+data_back = data_back %>% mutate(perc_fem_20_21 = perc_fem_20 + perc_fem_21) 
+data_back = data_back %>% dplyr::select(-perc_fem_21, -perc_fem_20)
+data_back = data_back %>% mutate(perc_mal_20_21 = perc_mal_20 + perc_mal_21) 
+data_back = data_back %>% dplyr::select(-perc_mal_21, -perc_mal_20)
+
+data_back = data_back %>% mutate(perc_fem_0_9 = perc_fem_0_5 + perc_fem_5_9)
+data_back = data_back %>% mutate(perc_fem_10_17 = perc_fem_10_14 + perc_fem_15_17)
+data_back = data_back %>% mutate(perc_fem_18_21 = perc_fem_18_19 + perc_fem_20_21)
+data_back = data_back %>% mutate(perc_fem_22_29 = perc_fem_22_24 + perc_fem_25_29)
+data_back = data_back %>% mutate(perc_fem_30_39 = perc_fem_30_34 + perc_fem_35_39)
+data_back = data_back %>% mutate(perc_fem_40_49 = perc_fem_40_44 + perc_fem_45_49)
+data_back = data_back %>% mutate(perc_fem_50_59 = perc_fem_50_54 + perc_fem_55_59)
+data_back = data_back %>% mutate(perc_fem_60_66 = perc_fem_60_61 + perc_fem_62_64 + perc_fem_65_66)
+data_back = data_back %>% mutate(perc_fem_67_79 = perc_fem_67_69 + perc_fem_70_74 + perc_fem_75_79)
+data_back = data_back %>% mutate(perc_fem_80_85 = perc_fem_80_84 + perc_fem_85_over)
+
+data_back = data_back %>% mutate(perc_mal_0_9 = perc_mal_0_4 + perc_mal_5_9)
+data_back = data_back %>% mutate(perc_mal_10_17 = perc_mal_10_14 + perc_mal_15_17)
+data_back = data_back %>% mutate(perc_mal_18_21 = perc_mal_18_19 + perc_mal_20_21)
+data_back = data_back %>% mutate(perc_mal_22_29 = perc_mal_22_24 + perc_mal_25_29)
+data_back = data_back %>% mutate(perc_mal_30_39 = perc_mal_30_34 + perc_mal_35_39)
+data_back = data_back %>% mutate(perc_mal_40_49 = perc_mal_40_44 + perc_mal_45_49)
+data_back = data_back %>% mutate(perc_mal_50_59 = perc_mal_50_54 + perc_mal_55_59)
+data_back = data_back %>% mutate(perc_mal_60_66 = perc_mal_60_61 + perc_mal_62_64 + perc_mal_65_66)
+data_back = data_back %>% mutate(perc_mal_67_79 = perc_mal_67_69 + perc_mal_70_74 + perc_mal_75_79)
+data_back = data_back %>% mutate(perc_mal_80_85 = perc_mal_80_84 + perc_mal_85_over)
+
+data_back = data_back %>% dplyr::select(-perc_fem_0_5, -perc_fem_5_9, -perc_fem_10_14, -perc_fem_15_17, -perc_fem_18_19, -perc_fem_20_21, -perc_fem_22_24, -perc_fem_25_29, -perc_fem_30_34, -perc_fem_35_39, -perc_fem_40_44, -perc_fem_45_49, -perc_fem_50_54, -perc_fem_55_59, -perc_fem_60_61, -perc_fem_62_64, -perc_fem_65_66, -perc_fem_67_69, -perc_fem_70_74, -perc_fem_75_79, -perc_fem_80_84, -perc_fem_85_over)
+
+data_back = data_back %>% dplyr::select(-perc_mal_0_4, -perc_mal_5_9, -perc_mal_10_14, -perc_mal_15_17, -perc_mal_18_19, -perc_mal_20_21, -perc_mal_22_24, -perc_mal_25_29, -perc_mal_30_34, -perc_mal_35_39, -perc_mal_40_44, -perc_mal_45_49, -perc_mal_50_54, -perc_mal_55_59, -perc_mal_60_61, -perc_mal_62_64, -perc_mal_65_66, -perc_mal_67_69, -perc_mal_70_74, -perc_mal_75_79, -perc_mal_80_84, -perc_mal_85_over)
+```
+
+```{r}
+data_back = data_back %>% mutate(perc_household_income_less_14 = perc_household_inc_less_10 + perc_household_inc_10_14)
+data_back = data_back %>% mutate(perc_household_income_15_24 = perc_household_inc_15_19 + perc_household_inc_20_24)
+data_back = data_back %>% mutate(perc_household_income_25_34 = perc_household_inc_25_29 + perc_household_inc_30_34)
+data_back = data_back %>% mutate(perc_household_income_35_44 = perc_household_inc_35_39 + perc_household_inc_40_44)
+data_back = data_back %>% mutate(perc_household_income_45_59 = perc_household_inc_45_49 + perc_household_inc_50_59)   
+data_back = data_back %>% mutate(perc_household_income_60_99 = perc_household_inc_60_74 + perc_household_inc_75_99)   
+data_back = data_back %>% mutate(perc_household_income_100_149 = perc_household_inc_100_124 + perc_household_inc_125_149)   
+data_back = data_back %>% mutate(perc_household_income_150_more = perc_household_inc_150_199 + perc_household_inc_200_more)
+ 
+data_back = data_back %>% dplyr::select(-perc_household_inc_less_10, -perc_household_inc_10_14, -perc_household_inc_15_19, -perc_household_inc_20_24, -perc_household_inc_25_29, -perc_household_inc_30_34, -perc_household_inc_35_39, -perc_household_inc_40_44, -perc_household_inc_45_49, -perc_household_inc_50_59, -perc_household_inc_60_74, -perc_household_inc_75_99, -perc_household_inc_100_124, -perc_household_inc_125_149, -perc_household_inc_150_199, -perc_household_inc_200_more) 
+```
+ 
+
+Hits over the time
+------------------
+```{r} 
+data_orth15_back %>% select(NAME, hits) %>% head()
+data_orth16_back %>% select(NAME, hits) %>% head()
+data_orth17_back %>% select(NAME, hits) %>% head()
+data_orth18_back %>% select(NAME, hits) %>% head()
+data_orth19_back %>% select(NAME, hits) %>% head()
+```
+ 
+
+Correlation plot
+----------------
+
+Candidate predictors were chosen on the basis of correlations higher
+than 0.2 and age groups with almost identical correlations were merged.
+
+``` {r}
+correl_back<-as.data.frame(cor(select_if(as.data.frame(data_back),is.numeric), method = "spearman"))
+
+correl_back$variable=row.names(correl_back)
+
+ggplot(subset(correl_back,!variable=="hits"),
+              aes(y=reorder(variable, hits),x=hits))+
+         geom_col()+
+         theme_minimal()+
+  labs(y="Variable",x="Correlation with interest in back brace")
+```
+
+Lowest smoothing of pairwise relationships
+
+``` {r}  
+ggplot(data=data_back,aes(x=perc_man_bus_sc_occ,y=hits,label=state_code))+
+  geom_text(size=3,check_overlap = TRUE)+
+  geom_smooth()+
+  labs(x="perc~",
+       y="Orth_product Interest")
+```
+
+
+```{r}
+data1_back = data_back %>% dplyr::select(-state_code, -perc_mal_0_9, -perc_mal_10_17, -perc_mal_18_21, -perc_mal_22_29, -perc_never_marr) 
+data1_back$NAME = as.factor(data1_back$NAME)
+data1_back$year = as.factor(data1_back$year)
+```
+
+```{r} 
+coplot(hits ~ year|NAME, type="b", data=data_back, ylab = "GSVI") # Points and lines
+# almost in all states the increasing trend for 2018-2019
+```
+
+
+```{r}
+density(data1_back$hits)
+
+# Add a Normal Curve (Thanks to Peter Dalgaard)
+z <- data1_back$hits 
+h<-hist(z, breaks=10, col="black", xlab="GSVI", 
+   main="Histogram with Normal Curve") 
+zfit<-seq(min(z),max(z),length=40) 
+yfit<-dnorm(zfit,mean=mean(z),sd=sd(z)) 
+yfit <- yfit*diff(h$mids[1:2])*length(z) 
+lines(zfit, yfit, col="blue", lwd=2)
+
+library(moments)
+skewness(data1_back$hits)
+kurtosis(data1_back$hits)
+# normal kurtosis = 3, skewness = 0
+
+qqnorm(data1_back$hits, pch = 1, frame = FALSE, main = "Normal Q-Q plot for GSVI of back brace")
+qqline(data1_back$hits, col = "steelblue", lwd = 2)
+ 
+```
+```{r}
+outliers <- boxplot(data1_back$hits, plot=FALSE)$out
+d_back<-data1_back
+d_back<- d_back[-which(d_back$hits %in% outliers),]
+```
+
+# After deleting outliers
+```{r}
+library(moments)
+skewness(d_back$hits)
+kurtosis(d_back$hits)
+# normal kurtosis = 3, skewness = 0
+
+qqnorm(d_back$hits, pch = 1, frame = FALSE, main = "Normal Q-Q plot for GSVI of back brace")
+qqline(d_back$hits, col = "steelblue", lwd = 2)
+```
+
+--------------------------
+OLS
+--------------------------
+
+```{r} 
+data_without = data1_back %>% dplyr::select(-NAME, -year)
+ols_back <- lm(hits~., data_without)
+summary(ols_back)
+car::vif(ols_back)
+
+yhat <- ols_back$fitted
+plot(data1_back$hits, yhat)
+```
+
+# we have panel data and need to use random or fixed effect model
+```{r}
+n <- names(data_without)  
+f <- as.formula(paste("hits ~ ", paste(n[!n %in% "hits"], collapse = " + ")))
+
+# fixed effects
+fixed_back <- plm(f, 
+                 data = data1_back,  
+                 index = c("NAME", "year"), 
+                 model = "within")
+library(broom)
+#model_plm %>% tidy()
+summary(fixed_back)
+```
+
+```{r}
+# print summary using robust standard errors
+#coeftest(fixed_back, vcov. = vcovHC, type = "HC1")
+```
+
+#Check for cross-sectional dependence
+```{r}
+pcdtest(fixed_back, test = c("lm")) # cross-sectional dependence exists
+
+# According to Baltagi, cross-sectional dependence is a problem in macro panels with long time series. This is not much of a problem in micro panels (few years and large number of cases).
+```
+
+Check if fixed effects or OLS should be used
+```{r}
+#fixef(model_plm)
+pFtest(fixed_back, ols_back) # we need to use ols
+```
+
+time-fixed effect
+```{r}
+g = names(data1_back) 
+ye <- as.formula(paste("hits ~", paste(g[!g %in% "hits"], collapse = " + ")))
+fixed.time_back <- plm(ye, 
+                 data = data1_back,  
+                 index = c("NAME", "year"), 
+                 model = "within")
+summary(fixed.time_back)
+pFtest(fixed.time_back, fixed_back)  
+
+plmtest(fixed_back, c("time"), type=("bp"))
+# both tests demonstrate the necessity of using the time-fixed effect 
+```
+
+```{r}
+library(gplots)
+plotmeans(hits ~ year, main="Heterogeineity across years", data=data1_back)
+plotmeans(hits ~ NAME, main="Heterogeineity across states", data=data1_back)
+``` 
+
+```{r}
+bartlett.test(hits ~ NAME, data = data1_back)
+leveneTest(hits ~ NAME, data = data1_back)
+fligner.test(hits ~ NAME, data = data1_back)
+# heterogeneity
+```
+
+Random effect
+```{r}  
+random_back <- plm(f, data=data1_back, index=c("NAME", "year"), model="random")
+summary(random_back)
+```
+
+Fixed or random
+```{r}
+phtest(fixed_back, random_back) # we should use random
+```
+
+#check for heteroscedasticity 
+```{r}
+bptest(hits ~ latitude + longitude + temperature_celcius + precipitation_inches +     perc_white + perc_black + perc_asian + perc_man_bus_sc_occ +     perc_serv_occ + perc_sal_off_occ + perc_constr_occ + perc_prod_transp_occ +     perc_mil_occ + perc_pr_wage_sal_work + perc_local_govern_work +     perc_stat_govern_work + perc_fed_govern_work + perc_self_empl +     perc_unpaid_fam_work + perc_marr + perc_div_sep_wid + perc_fem_0_9 +     perc_fem_10_17 + perc_fem_18_21 + perc_fem_22_29 + perc_fem_30_39 +     perc_fem_40_49 + perc_fem_50_59 + perc_fem_60_66 + perc_fem_67_79 +     perc_fem_80_85 + perc_mal_30_39 + perc_mal_40_49 + perc_mal_50_59 +     perc_mal_60_66 + perc_mal_67_79 + perc_mal_80_85 + perc_household_income_less_14 +     perc_household_income_15_24 + perc_household_income_25_34 +     perc_household_income_35_44 + perc_household_income_45_59 +     perc_household_income_60_99 + perc_household_income_100_149 +     perc_household_income_150_more + factor(NAME), data = data1_back, studentize=F)
+```
+# heteroscedasticity
+
+# Compare the models
+```{r}
+stargazer( ols_back, fixed_back, fixed.time_back, random_back, type = "text")
+car::vif(embezzlement_mode2)
+```
+
+----------------------------
+Multilevel model
+----------------------------
+```{r}
+# We have a random intercept (which allows the intercept to vary across clusters).
+library(lme4)
+mult_back <- lmer(hits ~ latitude + longitude + temperature_celcius + precipitation_inches +     perc_white + perc_black + perc_asian + perc_man_bus_sc_occ +     perc_serv_occ + perc_sal_off_occ + perc_constr_occ + perc_prod_transp_occ +     perc_mil_occ + perc_pr_wage_sal_work + perc_local_govern_work +     perc_stat_govern_work + perc_fed_govern_work + perc_self_empl +     perc_unpaid_fam_work + perc_marr + perc_div_sep_wid + perc_fem_0_9 +     perc_fem_10_17 + perc_fem_18_21 + perc_fem_22_29 + perc_fem_30_39 +     perc_fem_40_49 + perc_fem_50_59 + perc_fem_60_66 + perc_fem_67_79 +     perc_fem_80_85 + perc_mal_30_39 + perc_mal_40_49 + perc_mal_50_59 +     perc_mal_60_66 + perc_mal_67_79 + perc_mal_80_85 + perc_household_income_less_14 +     perc_household_income_15_24 + perc_household_income_25_34 +     perc_household_income_35_44 + perc_household_income_45_59 +     perc_household_income_60_99 + perc_household_income_100_149 +     perc_household_income_150_more + (1 | NAME),
+               data = data1_back,
+               REML = FALSE)
+summary(mult_back)
+```
+
+```{r}
+summ(mult_back)
+```
+
+```{r}
+library(merTools)
+
+predictInterval(mult_back)   # for various model predictions, possibly with new data
+
+REsim(mult_back)             # mean, median and sd of the random effect estimates
+
+plotREsim(REsim(mult_back)) + labs(title = "Plot of Random Effects for back brace") 
+```
+
+## transforming into DUMMY -> states and year
+ 
+
+## transforming into DUMMY -> states and year
+```{r}
+binary_state <- to.dummy(data1_back$NAME, "state") # convert character variables into dummy
+binary_state = as.data.frame(binary_state) 
+binary_state = binary_state %>% mutate(NAME = data1_back$NAME)
+ 
+pen_back = data1_back %>% inner_join(binary_state) %>% unique() 
+
+binary_year <- to.dummy(data1_back$year, "year") # convert character variables into dummy
+binary_year = as.data.frame(binary_year) 
+binary_year = binary_year %>% mutate(year = data1_back$year)
+ 
+pen_back = pen_back %>% inner_join(binary_year) %>% unique() 
+
+pen_back = pen_back %>% dplyr::select(-year, -NAME)
+# Classes
+length(grep("state.", names(pen_back), value=TRUE)) #dummy 
+state = grep("state.", names(pen_back), value=TRUE)
+year = grep("year.", names(pen_back), value=TRUE)
+```
+
+## Cross-validation
+```{r}  
+library(caret)
+ctrlspecs_lm <- trainControl(method = "cv", number =10, savePredictions = "all")
+```
+
+```{r} 
+model2 <- train(hits ~., data = pen_back, preprocess = c("center", "scale"), method = "lm", trControl = ctrlspecs_lm, na.action=na.omit)
+```
+# Variable importance
+
+```{r}
+ols_imp <- varImp(model2)
+ols_imp
+ggplot(varImp(model2))
+```
+
+```{r}
+predictions2 <- predict(model2, newdata = pen_back)
+```
+
+# model performance/accuracy
+```{r}
+library(MLmetrics)
+Modelperf2 <- data.frame(MSE = MSE(predictions2, pen_back$hits), RMSE = RMSE(predictions2, pen_back$hits), Rsq = R2(predictions2, pen_back$hits))
+Modelperf2
+```
+
+--------------------------------
+RIDGE
+--------------------------------
+
+http://www.science.smith.edu/~jcrouser/SDS293/labs/lab10-r.html
+```{r}  
+pen_back = as.data.frame(pen_back)
+
+x = model.matrix(hits~., pen_back)[,-1] # trim off the first column
+                                         # leaving only the predictors
+y = pen_back %>%
+  dplyr::select(hits) %>%
+  unlist() %>%
+  as.numeric()
+```
+
+```{r}
+library(ISLR)
+library(glmnet)
+
+grid = 10^seq(10, -2, length = 300)
+ridge_mod = glmnet(x, y, alpha = 0, lambda = grid)
+```
+
+```{r}
+dim(coef(ridge_mod))
+plot(ridge_mod)    # Draw plot of coefficients
+plot(ridge_mod, xvar = "lambda", label = TRUE)
+plot(ridge_mod, xvar = "dev", label = TRUE)
+```
+# from 5th lambda the coefficients are becoming much closer to zero
+
+# Next we fit a ridge regression model using  λ=4
+# predictions for a test set, by replacing type="coefficients" with the newx argument.
+```{r} 
+ridge_pred4 = predict(ridge_mod, s = 4, newx = x)
+
+ridge_4 <- data.frame(regr = "ridge_l4", MSE = MSE(ridge_pred4, data1$hits), RMSE = RMSE(ridge_pred4, data1$hits), Rsq = R2(ridge_pred4, data1$hits), mean_coeff = mean(predict(ridge_mod, s = 4, type = "coefficients")))
+ridge_4
+```
+
+
+```{r}
+mean(predict(ridge_mod, s = 50, type = "coefficients"))
+```
+
+# We get better result by fitting a ridge regression model with a very large value of  λ
+# Note that 1e10 means 1010
+```{r}
+ridge_pred_large = predict(ridge_mod, s = 1e10, newx = x)
+mean((ridge_pred_large - y)^2)
+
+ridge_1010 <- data.frame(regr = "ridge_l1010", MSE = MSE(ridge_pred_large, pen_back$hits), RMSE = RMSE(ridge_pred_large, pen_back$hits), Rsq = R2(ridge_pred_large, pen_back$hits), mean_coeff = mean(predict(ridge_mod, s = 1e10, type="coefficients")))
+ridge_1010
+```
+ 
+# Now, if we will try with s = 0 with penalty 0
+```{r}
+# The coefficients are unregularized when lambda is zero
+ridge_pred0 = predict(ridge_mod, s = 0, newx = x)  
+
+ridge_0 <- data.frame(regr = "ridge_l0", MSE = MSE(ridge_pred0, pen_back$hits), RMSE = RMSE(ridge_pred0, pen_back$hits), Rsq = R2(ridge_pred0, pen_back$hits), mean_coeff = mean(predict(ridge_mod, s = 0, type="coefficients")))
+ridge_0
+```
+
+# Instead of arbitrarily choosing  λ, it would be better to use cross-validation to choose the tuning parameter  λ
+# We can do this using the built-in cross-validation function, cv.glmnet(). By default, the function performs 10-fold cross-validation, though this can be changed using the argument folds. Note that we set a random seed first so our results will be reproducible, since the choice of the cross-validation folds is random.
+
+```{r} 
+cv.out = cv.glmnet(x, y, alpha = 0)  
+bestlam = cv.out$lambda.min  # Select lambda that minimizes training MSE
+bestlam
+
+plot(cv.out) # Draw plot of training MSE as a function of lambda  
+```
+# best lambda
+```{r}
+ridge_pred_cv = predict(ridge_mod, s = bestlam, newx = x) # Use best lambda to predict test data
+```
+
+```{r}
+ridge_bestlamb <- data.frame(regr = "ridge_cv", MSE = MSE(ridge_pred_cv, pen_back$hits), RMSE = RMSE(ridge_pred_cv, pen_back$hits), Rsq = R2(ridge_pred_cv, pen_back$hits), mean_coeff = mean(predict(ridge_mod, type = "coefficients", s = bestlam))) # Display coefficients using lambda chosen by CV
+ridge_bestlamb
+```
+
+```{r}
+ridge_comp <- rbind(ridge_0, ridge_4, ridge_1010, ridge_bestlamb)
+ridge_comp
+```
+
+Ridge (method = 2)
+
+```{r} 
+library(caret)
+ctrlspecs_r <- trainControl(method = "cv", number =10, savePredictions = "all")
+```
+
+# sed seed
+# Specify lasso regr model to be estimated using training data and 10-fold cv framework
+```{r}
+model0 <- train(hits ~ ., data = pen_back, preprocess = c("center", "scale"), method = "glmnet", 
+                tuneGrid = expand.grid(alpha = 0, lambda = grid), trControl = ctrlspecs_r, 
+                na.action = na.omit)
+```
+
+# Best (optimal) tuning parameter (alpha, lambda)
+```{r}
+model0$bestTune
+model0$bestTune$lambda
+```
+
+# Variable importance
+
+```{r}
+ridge_imp <- varImp(model0)
+ridge_imp
+ ggplot(varImp(model0)) 
+```
+# Model prediction
+```{r}
+predictions0 <- predict(model0, newdata = data1)
+```
+
+# model performance/accuracy
+```{r}
+library(MLmetrics)
+Modelperf0 <- data.frame(MSE = MSE(predictions0, pen_back$hits), RMSE = RMSE(predictions0, pen_back$hits), Rsq = R2(predictions0, pen_back$hits))
+Modelperf0
+```
+
+-----------------------------------------------------------
+LASSO
+-----------------------------------------------------------
+
+```{r} 
+lasso_mod = glmnet(x, y, 
+                   alpha = 1, 
+                   lambda = grid)  
+
+```
+
+```{r}
+plot(lasso_mod)    # Draw plot of coefficients
+plot(lasso_mod, xvar = "lambda", label = TRUE) # as lambda become larger, the coeff are decreasing
+plot(lasso_mod, xvar = "dev", label = TRUE) # Goodness of fit. This plot tells us how much of the deviance which is similar to R-squared has been explained by the model.
+```
+````{r}
+print(lasso_mod)
+```
+
+```{r} 
+lasso_pred_05 = predict(lasso_mod, s = 0.5, newx = x)
+
+
+lasso_05 <- data.frame(regr = "lasso_l0.5", MSE = MSE(lasso_pred_05, pen_back$hits), RMSE = RMSE(lasso_pred_05, pen_back$hits), Rsq = R2(lasso_pred_05, pen_back$hits), mean_coeff = mean(predict(lasso_mod, type = "coefficients", s = 0.5)))
+lasso_05
+```
+
+# look at the coefficients with a given lambda
+```{r}  
+lasso_coeff_05 <- predict(lasso_mod, type = "coefficients", s = 0.5)
+lasso_coeff_05[lasso_coeff_05 != 0]
+```
+ 
+# Notice that in the coefficient plot that depending on the choice of tuning parameter, some of the coefficients are exactly equal to zero. We now perform cross-validation and compute the associated test error:
+
+```{r} 
+cv.out = cv.glmnet(x, y, alpha = 1)  
+plot(cv.out) # Draw plot of training MSE as a function of lambda. Cross validation will indicate which variables to include and picks the coefficients from the best model.
+
+bestlam = cv.out$lambda.min # Select lambda that minimizes training MSE
+lasso_pred_cv = predict(lasso_mod, s = bestlam, newx = x) # Use best lambda for full dataset
+```
+
+```{r}
+lasso_cv <- data.frame(regr = "cv", MSE = MSE(lasso_pred_cv, pen_back$hits), RMSE = RMSE(lasso_pred_cv, pen_back$hits), Rsq = R2(lasso_pred_cv, pen_back$hits), mean_coeff = mean(predict(lasso_mod, type = "coefficients", s = bestlam)))
+lasso_cv
+```
+
+# This is substantially lower than the test set MSE of the least squares, and very similar to the test MSE of ridge regression with  λ chosen by cross-validation.
+# However, the lasso has a substantial advantage over ridge regression in that the resulting coefficient estimates are sparse. Here we see that 20 of the 171 coefficient estimates are exactly zero:
+
+```{r}
+lasso_coeff_cv <- predict(lasso_mod, type = "coefficients", s = bestlam)
+lasso_coeff_cv[lasso_coeff_cv != 0]# Display only non-zero coefficients
+```
+```{r}
+lasso_pred_50 = predict(lasso_mod, s = 50, newx = x)
+
+
+lasso_50 <- data.frame(regr = "lasso_l50", MSE = MSE(lasso_pred_50, pen_back$hits), RMSE = RMSE(lasso_pred_50, pen_back$hits), Rsq = R2(lasso_pred_50, pen_back$hits), mean_coeff = mean(predict(lasso_mod, type = "coefficients", s = 50))) 
+lasso_50
+```
+
+```{r}
+lasso_comp <- rbind(lasso_05, lasso_50, lasso_cv)
+lasso_comp
+```
+
+LASSO (method 2)
+
+```{r}  
+ctrlspecs <- trainControl(method = "cv", number =10, savePredictions = "all")
+```
+
+# Specify lasso regr model to be estimated using training data and 10-fold cv framework
+```{r} 
+model1 <- train(hits ~ ., data = pen_back, preprocess = c("center", "scale"), method = "glmnet", 
+                tuneGrid = expand.grid(alpha = 1, lambda = grid), trControl = ctrlspecs, 
+                na.action = na.omit)
+```
+
+# Best (optimal) tuning parameter (alpha, lambda)
+```{r}
+model1$bestTune
+model1$bestTune$lambda
+```
+
+# Variable importance
+
+```{r}
+lasso_imp <- varImp(model1)
+lasso_imp
+ggplot(varImp(model1))
+```
+  
+# Model prediction
+```{r}
+predictions1 <- predict(model1, newdata = data1) 
+```
+
+# model performance/accuracy
+```{r}
+Modelperf1 <- data.frame(MSE = MSE(predictions1, pen_back$hits), RMSE = RMSE(predictions1, pen_back$hits), Rsq = R2(predictions1, pen_back$hits))
+Modelperf1
+```
+
+
+
+# compare models using paired-samples (one-sample) t-test
+```{r}
+
+compare_models(model0, model1, metric = "RMSE")
+compare_models(model0, model1, metric = "Rsquared")
+
+compare_models(model1, model2, metric = "RMSE")
+compare_models(model1, model2, metric = "Rsquared")
+```
+
+# compare model0, model1 and model2 predictive performance  
+```{r}
+comp <- matrix(c(Modelperf0$MSE, Modelperf0$RMSE,  Modelperf0$Rsq,
+                 Modelperf1$MSE, Modelperf1$RMSE,  Modelperf1$Rsq, 
+                 Modelperf2$MSE, Modelperf2$RMSE, Modelperf2$Rsq), 
+               ncol=3, byrow=TRUE)
+colnames(comp) <- c("MSE", "RMSE", "R-square")
+rownames(comp) <- c("Ridge regression", "LASSO regression", "OLS")
+comp
+```
+
+```{r}
+lasso_imp
+ridge_imp
+ols_imp
+```
+
+```{r}
+summary(model0)
+```
+#standard errors are not very meaningful for strongly biased estimates such as arise from penalized estimation methods. Penalized estimation is a procedure that reduces the variance of estimators by introducing substantial bias. The bias of each estimator is therefore a major component of its mean squared error, whereas its variance may contribute only a small part.
+
+#Unfortunately, in most applications of penalized regression it is impossible to obtain a sufficiently precise estimate of the bias. Any bootstrap-based calculations can only give an assessment of the variance of the estimates. Reliable estimates of the bias are only available if reliable unbiased estimates are available, which is typically not the case in situations in which penalized estimates are used.
+
+https://cran.r-project.org/web/packages/penalized/vignettes/penalized.pdf
+
+#Among the (few) strategies, including the post-selective inference and the (modified) residual bootstrap, here we illustrate the R package islasso implementing the recent `quasi’ lasso approach based on the induced smoothing idea (Brown and Wang, 2005) as discussed in Cilluffo et al. (2019)
+```{r}
+library(islasso)
+check <- islasso(hits ~ ., data = data1, lambda = bestlam)
+summary(check, pval = 0.1)
+
+# http://rstudio-pubs-static.s3.amazonaws.com/567388_f112441d059a48c9905196cae2680ed3.html
+```
+
+```{r}
+library(plotmo)
+plotres(model0, which=1:4)
+```
+ 
+
+```{r}
+plotres(model1, which=1:4)
+```
+
+```{r}
+plotres(ols, which=1:4)
+```
+
+
+----------------------
+GROUP LASSO
+---------------------
+
+```{#r}
+library(grpreg)
+group <- rep(data1)
+group
+ 
+fit <- grpreg(x, y, group, penalty="grLasso")
+
+http://www.biostat.umn.edu/~weip/course/dm/examples/exampleforhighd1.R 
+https://www.youtube.com/watch?v=2Cj_L1I2JIo 
+https://cran.r-project.org/web/packages/grpreg/vignettes/getting-started.html
+````
